@@ -8,6 +8,8 @@ import edu.coursera.concurrent.boruvka.Component;
 import java.util.Queue;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.concurrent.locks.ReentrantLock;
+
 
 /**
  * A parallel implementation of Boruvka's algorithm to compute a Minimum
@@ -28,7 +30,64 @@ public final class ParBoruvka extends AbstractBoruvka<ParBoruvka.ParComponent> {
     @Override
     public void computeBoruvka(final Queue<ParComponent> nodesLoaded,
             final SolutionToBoruvka<ParComponent> solution) {
-        throw new UnsupportedOperationException();
+
+        ParComponent n = null;
+
+        // START OF EDGE CONTRACTION ALGORITHM
+        while (!nodesLoaded.isEmpty()) {
+
+            /*
+             * poll() removes first element (node loopNode) from the nodesLoaded
+             * work-list.
+             */
+            n = nodesLoaded.poll();
+
+            // following situation null can happen, if
+            // Empty Queue or the component is already been acquired by another thread
+            if (n == null || !n.lock.tryLock()) {
+                continue; // lock acquisition failed, go and try to get a different node.
+            }
+
+            if(n.isDead){
+                n.lock.unlock();
+                continue; // node has already been merged
+            }
+
+            final Edge<ParComponent> e = n.getMinEdge(); // retrieve min edge of the current node
+            if (e == null){
+                solution.setSolution(n);
+                break; // done- we've contracted the graph to a single node
+            }
+
+            final ParComponent other = e.getOther(n);
+
+            if (!other.lock.tryLock()){
+                // unable to get lock on other , so lets just release n as well, so another thread can work on n at a later time.
+                n.lock.unlock();
+                nodesLoaded.add(n);
+                continue;
+            }
+
+            if (other.isDead){
+                other.lock.unlock();
+                n.lock.unlock();
+                nodesLoaded.add(n);
+                continue;
+            }
+
+            other.isDead = true;
+            // merge "other" into n
+            n.merge(other, e.weight());
+
+            n.lock.unlock();
+            other.lock.unlock();
+
+            // add merged node back into worklist.
+            nodesLoaded.add(n);
+
+        }
+
+
     }
 
     /**
@@ -42,6 +101,12 @@ public final class ParBoruvka extends AbstractBoruvka<ParBoruvka.ParComponent> {
          *  it.
          */
         public final int nodeId;
+
+        /**
+         * Every parcomponent instance gets its own lock
+         */
+        public final ReentrantLock lock = new ReentrantLock();
+
 
         /**
          * List of edges attached to this component, sorted by weight from least
